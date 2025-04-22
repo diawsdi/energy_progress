@@ -1,0 +1,127 @@
+Below is a detailed, step‑by‑step blueprint of the **end‑to‑end architecture** for processing nightlight data for any user‑defined area to **monitor electrification progress** over time. It emphasizes open-source tools and scalability.
+
+---
+
+## 1. **Inputs & Configuration**
+
+- **Input Geometry**: Arbitrary polygon (GeoJSON) defining the area of interest (AOI).
+- **Time Range**: `start_date`, `end_date` (e.g., monthly intervals). The `end_date` can be in the past or future (for ongoing monitoring).
+- **Primary Data Source**:
+  - NASA Black Marble VNP46A2 (BRDF‑corrected nightly radiance)
+- **Optional Data Source (for context)**:
+  - Sentinel‑2 L2A (e.g., for detecting new settlements or infrastructure)
+- **Open Source Stack**:
+  - **Storage**: MinIO (S3-compatible object storage) for rasters and tiles, PostGIS for metadata and timeseries.
+  - **Processing**: Python (Rasterio, GDAL, Shapely), potentially a task queue (e.g., Celery) for parallel processing.
+- **Storage Targets**:
+  - MinIO Bucket: For raw GeoTIFFs and derived map tiles (e.g., PNG/WebP).
+  - PostGIS Database: For area metadata, timeseries metrics, and potentially tile index information.
+
+---
+
+## 2. **High‑Level Algorithm Steps**
+
+1. **Validate & Register AOI**
+   - Read user‑supplied polygon.
+   - Assign a unique `area_id`.
+   - Store polygon and metadata in `areas(area_id, name, geom)`.
+
+2. **Monthly Data Export (Earth Engine)**
+   For each month `M` in the time range (or ongoing for future dates):
+   a. **Night‑Light Raster**:
+      - Query Earth Engine collection "NASA/VIIRS/002/VNP46A2".
+      - Filter to `[M, M+1month)`, select `Gap_Filled_DNB_BRDF_Corrected_NTL`.
+      - Aggregate (e.g., `.mean()` or `.median()`), clip to AOI.
+      - Export GeoTIFF to `minio://your-bucket/area_id/rasters/black_marble/YYYY_MM.tif`.
+   b. **Sentinel‑2 Composite** (Optional):
+      - If needed for context, export similarly to `minio://your-bucket/area_id/rasters/sentinel2/YYYY_MM.tif`.
+
+3. **Local/Backend ETL Processing**
+   - Triggered after exports complete (e.g., via event notification or scheduled task).
+   - **Scalability**: Use a task queue (Celery, RQ, etc.) to process multiple months/areas concurrently.
+   ```python
+   for each month M with completed export:
+     # 3.1 Download raster(s) from MinIO
+     bm_path = download_from_minio(f"area_id/rasters/black_marble/YYYY_MM.tif")
+     # s2_path = download_from_minio(...) # Optional
+
+     # 3.2 Compute Brightness Metric(s)
+     # Example: Mean brightness within the AOI polygon
+     brightness_stats = zonal_stats(
+       geometry=AOI_polygon,
+       raster=bm_path,
+       stats=['mean', 'median', 'sum', 'count'] # More stats useful for electrification
+     )
+     # Example: Calculate percentage of lit pixels above a threshold
+
+     # 3.3 Generate Map Tiles
+     # Use gdal2tiles or similar library to generate XYZ tiles
+     tile_output_dir = f"/tmp/tiles/{area_id}/YYYY_MM/"
+     generate_tiles(input_raster=bm_path, output_dir=tile_output_dir, zoom_levels='8-14')
+     upload_tiles_to_minio(tile_output_dir, f"area_id/tiles/black_marble/YYYY_MM/")
+     # Store tile metadata (e.g., bounds, zoom levels) if needed
+
+     # 3.4 (Optional) Contextual Analysis
+     # infra_flag = run_model_on_raster(s2_path, model='settlement_detector')
+
+     # 3.5 Write Results to DB
+     INSERT INTO area_timeseries (
+       area_id, month, mean_brightness, median_brightness, sum_brightness, lit_pixel_count, tile_path_pattern # ... other metrics
+     ) VALUES (
+       area_id, M+'-01', brightness_stats['mean'], brightness_stats['median'], ..., 'area_id/tiles/black_marble/YYYY_MM/{z}/{x}/{y}.png'
+     );
+
+     # 3.6 Cleanup local files
+     cleanup(bm_path, tile_output_dir)
+   ```
+
+4. **Database Schema (PostGIS)**
+
+```sql
+-- Registered areas of interest
+CREATE TABLE areas (
+  area_id   SERIAL PRIMARY KEY,
+  name      TEXT UNIQUE,
+  geom      GEOMETRY(Polygon, 4326) NOT NULL,
+  metadata  JSONB -- Other relevant info
+);
+CREATE INDEX areas_geom_idx ON areas USING GIST (geom);
+
+-- Monthly nightlight-derived metrics per area
+CREATE TABLE area_timeseries (
+  area_id           INT REFERENCES areas(area_id) ON DELETE CASCADE,
+  month             DATE NOT NULL,
+  mean_brightness   DOUBLE PRECISION,
+  median_brightness DOUBLE PRECISION,
+  sum_brightness    DOUBLE PRECISION,
+  lit_pixel_count   INT,
+  tile_path_pattern TEXT, -- Pattern like 'area_id/tiles/black_marble/YYYY_MM/{z}/{x}/{y}.png'
+  -- Add other computed metrics as needed
+  -- Optional: Add fields related to Sentinel-2 analysis if performed
+  PRIMARY KEY (area_id, month)
+);
+CREATE INDEX area_timeseries_month_idx ON area_timeseries (month);
+```
+
+5. **API & Frontend Serving**
+   - **Timeseries Endpoint**: `GET /areas/{area_id}/timeseries?start=&end=`
+     - Returns: List of `{ month, mean_brightness, median_brightness, ... }` for charts.
+   - **Tile Serving**:
+     - Configure MinIO for public read access (with necessary security considerations, e.g., scoped policies) to the tile bucket/prefix.
+     - The frontend constructs tile URLs directly using the `tile_path_pattern` retrieved from the `area_timeseries` table.
+   - **Frontend**: Displays charts of brightness over time and uses a map library (Leaflet, Mapbox GL JS) to show the nightlight tiles for selected months by constructing the URLs to MinIO.
+
+6. **Scalability & Considerations**
+   - **ETL Parallelization**: Use task queues for heavy processing (downloading, stats, tiling).
+   - **Database Performance**: Ensure proper indexing on `area_timeseries` (area_id, month). Consider partitioning for very large datasets.
+   - **Tiling Efficiency**: Optimize tile generation (zoom levels, formats).
+   - **Data Volume**: Nightlight data (VNP46A2) is manageable; Sentinel-2 adds significantly more volume if used.
+   - **Cost**: Earth Engine export quotas, compute resources for ETL, storage costs (MinIO self-hosted or cloud).
+
+---
+
+### 📝 **Key Focus: Electrification Insights**
+
+- The `mean_brightness`, `median_brightness`, and `sum_brightness` provide aggregate indicators.
+- Comparing `lit_pixel_count` (pixels above a certain radiance threshold) over time can show expansion of lighted areas.
+- Visual comparison using the map tiles provides qualitative insights into *where* changes are happening within the AOI.

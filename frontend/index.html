@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nightlight Visualization</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+        #container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        #header {
+            background-color: #333;
+            color: white;
+            padding: 10px 20px;
+        }
+        #content {
+            display: flex;
+            flex: 1;
+        }
+        #sidebar {
+            width: 300px;
+            padding: 20px;
+            background-color: #f0f0f0;
+            overflow-y: auto;
+        }
+        #map {
+            flex: 1;
+            background-color: #e5e5e5;
+        }
+        h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        h2 {
+            margin-top: 20px;
+            font-size: 18px;
+        }
+        select, button {
+            margin: 5px 0;
+            padding: 8px;
+            width: 100%;
+        }
+        #stats {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: white;
+            border-radius: 5px;
+        }
+        #timeSlider {
+            width: 100%;
+            margin: 10px 0;
+        }
+        #sliderValue {
+            text-align: center;
+            font-weight: bold;
+        }
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+        }
+        .stat-label {
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="header">
+            <h1>Nightlight Visualization Over Time</h1>
+        </div>
+        <div id="content">
+            <div id="sidebar">
+                <h2>Area Selection</h2>
+                <select id="areaSelect">
+                    <option value="">Loading areas...</option>
+                </select>
+                <h2>Time Period</h2>
+                <div id="sliderValue">2024-01</div>
+                <input type="range" id="timeSlider" min="0" max="2" step="1" value="0">
+                
+                <h2>Statistics</h2>
+                <div id="stats">
+                    <div class="stat-row">
+                        <span class="stat-label">Mean Brightness:</span>
+                        <span id="meanBrightness">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Median Brightness:</span>
+                        <span id="medianBrightness">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Sum Brightness:</span>
+                        <span id="sumBrightness">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Lit Pixel Count:</span>
+                        <span id="litPixelCount">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Lit Percentage:</span>
+                        <span id="litPercentage">-</span>
+                    </div>
+                </div>
+            </div>
+            <div id="map"></div>
+        </div>
+    </div>
+
+    <script>
+        // API endpoint base
+        const API_BASE = 'http://localhost:8009';
+        
+        // State variables
+        let areas = [];
+        let currentArea = null;
+        let timeseriesData = [];
+        let currentTimeIndex = 0;
+        let currentTileLayer = null;
+        let map = null;
+        
+        // Initialize the map
+        function initMap() {
+            map = L.map('map').setView([0, 0], 2);
+            
+            // Add OpenStreetMap base layer
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+        }
+        
+        // Fetch all areas
+        async function fetchAreas() {
+            try {
+                const response = await fetch(`${API_BASE}/areas/`);
+                areas = await response.json();
+                
+                const areaSelect = document.getElementById('areaSelect');
+                areaSelect.innerHTML = '';
+                
+                if (areas.length === 0) {
+                    areaSelect.innerHTML = '<option value="">No areas found</option>';
+                } else {
+                    areas.forEach(area => {
+                        const option = document.createElement('option');
+                        option.value = area.area_id;
+                        option.textContent = area.name;
+                        areaSelect.appendChild(option);
+                    });
+                    
+                    // Select the first area by default
+                    selectArea(areas[0].area_id);
+                }
+            } catch (error) {
+                console.error('Error fetching areas:', error);
+                document.getElementById('areaSelect').innerHTML = '<option value="">Error loading areas</option>';
+            }
+        }
+        
+        // Select an area and load its timeseries data
+        async function selectArea(areaId) {
+            currentArea = areas.find(area => area.area_id == areaId);
+            
+            if (!currentArea) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/areas/${areaId}/timeseries?start_date=2024-01-01&end_date=2024-12-31`);
+                timeseriesData = await response.json();
+                
+                if (timeseriesData.length === 0) {
+                    alert('No timeseries data available for this area');
+                    return;
+                }
+                
+                // Update the slider max value
+                const slider = document.getElementById('timeSlider');
+                slider.max = timeseriesData.length - 1;
+                slider.value = 0;
+                currentTimeIndex = 0;
+                
+                // Update the map view to the area's bounding box
+                if (timeseriesData[0].bounding_box) {
+                    const bb = timeseriesData[0].bounding_box;
+                    const bounds = [
+                        [bb.miny, bb.minx],
+                        [bb.maxy, bb.maxx]
+                    ];
+                    map.fitBounds(bounds);
+                }
+                
+                // Show the first month's data
+                updateMapAndStats();
+            } catch (error) {
+                console.error('Error fetching timeseries data:', error);
+                alert('Error loading timeseries data');
+            }
+        }
+        
+        // Update the map and statistics based on the current selection
+        function updateMapAndStats() {
+            const currentData = timeseriesData[currentTimeIndex];
+            
+            if (!currentData) return;
+            
+            // Update the slider value display
+            const date = new Date(currentData.month);
+            document.getElementById('sliderValue').textContent = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+            
+            // Update the statistics
+            document.getElementById('meanBrightness').textContent = currentData.mean_brightness.toFixed(3);
+            document.getElementById('medianBrightness').textContent = currentData.median_brightness.toFixed(3);
+            document.getElementById('sumBrightness').textContent = currentData.sum_brightness.toFixed(3);
+            document.getElementById('litPixelCount').textContent = currentData.lit_pixel_count;
+            document.getElementById('litPercentage').textContent = currentData.lit_percentage.toFixed(2) + '%';
+            
+            // Update the map layer
+            if (currentTileLayer) {
+                map.removeLayer(currentTileLayer);
+            }
+            
+            if (currentData.tile_url_template) {
+                currentTileLayer = L.tileLayer(currentData.tile_url_template, {
+                    minZoom: currentData.min_zoom,
+                    maxZoom: currentData.max_zoom,
+                    opacity: 0.7
+                }).addTo(map);
+            }
+        }
+        
+        // Event listeners
+        document.addEventListener('DOMContentLoaded', () => {
+            initMap();
+            fetchAreas();
+            
+            // Area selection change
+            document.getElementById('areaSelect').addEventListener('change', (e) => {
+                if (e.target.value) {
+                    selectArea(e.target.value);
+                }
+            });
+            
+            // Time slider change
+            document.getElementById('timeSlider').addEventListener('input', (e) => {
+                currentTimeIndex = parseInt(e.target.value);
+                updateMapAndStats();
+            });
+        });
+    </script>
+</body>
+</html> 

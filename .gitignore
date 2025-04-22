@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Generated visualization files
+*_colorized.png
+*_colorized.tif
+dakar_masked.png
+dakar_yellow.png
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
+
+# Service account credentials
+*.json
+
+# MinIO data
+minio_data/
+
+# Temporary files
+*.tmp
+tmp/
+temp/
+
+# Docker volumes
+postgres_data/
+minio_data/
+
+# Raster data
+# Uncomment the following line if you don't want to track the original raster files
+# *.tif 

@@ -1,0 +1,27 @@
+# API Framework
+fastapi==0.108.0
+uvicorn==0.25.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+starlette==0.32.0.post1
+
+# Database
+psycopg2-binary==2.9.9
+SQLAlchemy==2.0.25
+GeoAlchemy2==0.14.2
+
+# Storage
+minio==7.2.0
+
+# Geospatial
+geojson==3.1.0
+Shapely==2.0.2
+
+# Utils
+python-dateutil==2.8.2
+python-dotenv==1.0.0
+python-multipart==0.0.6
+loguru==0.7.2
+
+# Documentation
+openapi-schema-pydantic==1.2.4 
